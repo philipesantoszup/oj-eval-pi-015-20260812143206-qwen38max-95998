@@ -33,7 +33,7 @@ static const int  LEAF_HDR = 8;
 static const int  LEAF_CAP = (BS - LEAF_HDR) / SLOTB;            // 237
 static const int  INT_CAP  = (BS - 8 - 4) / (SLOTB + 4);         // 224
 static const int  INT_KEYBASE = 4 + 4 * (INT_CAP + 1);           // 904
-static const int  NSLOT   = 160;              // cache slots (~2.5 MiB)
+static const int  NSLOT   = 80;               // cache slots (~1.25 MiB)
 static const char *DBFILE = "kvdb.dat";
 
 // ---------------- globals ----------------
@@ -352,7 +352,7 @@ static void do_delete(const u8 *ka, int la, u32 va){
 }
 
 // ---------------- output ----------------
-static const int OUTSZ = 1 << 19;            // 512 KiB
+static const int OUTSZ = 192 * 1024;         // 192 KiB
 static char outbuf[OUTSZ];
 static int outpos = 0;
 
@@ -411,7 +411,7 @@ static void do_find(const u8 *ka, int la){
 }
 
 // ---------------- input ----------------
-static const int INSZ = 1 << 16;
+static const int INSZ = 1 << 15;
 static u8 inbuf[INSZ];
 static size_t inpos = 0, inlen = 0;
 
@@ -487,6 +487,7 @@ int main(){
     save_meta();
     fsync(fd);
     close(fd);
+    free(cmem);
 #ifdef DEBUG_MEM
     {
         FILE *f = fopen("/proc/self/status", "r");
