@@ -1,0 +1,17 @@
+CMakeFiles/
+CMakeCache.txt
+Makefile
+cmake_install.cmake
+CTestTestfile.cmake
+DartConfiguration.tcl
+install_manifest.txt
+code
+*.o
+*.a
+kvdb.dat
+*.dat
+test_*.txt
+input_*.txt
+out_*.txt
+ref_*.txt
+__pycache__/
