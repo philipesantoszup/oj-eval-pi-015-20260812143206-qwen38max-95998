@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #ifdef DEBUG_MEM
 #include <cstdio>
 #endif
@@ -33,7 +34,7 @@ static const int  LEAF_HDR = 8;
 static const int  LEAF_CAP = (BS - LEAF_HDR) / SLOTB;            // 237
 static const int  INT_CAP  = (BS - 8 - 4) / (SLOTB + 4);         // 224
 static const int  INT_KEYBASE = 4 + 4 * (INT_CAP + 1);           // 904
-static const int  NSLOT   = 80;               // cache slots (~1.25 MiB)
+static const int  NSLOT   = 40;               // cache slots (~640 KiB)
 static const char *DBFILE = "kvdb.dat";
 
 // ---------------- globals ----------------
@@ -177,21 +178,23 @@ static void flush_cache(){
 }
 
 // ---------------- meta ----------------
+alignas(4096) static u8 metabuf[4096];
+
 static void save_meta(){
-    u8 m[16];
-    wr32(m, (i32)MAGIC);
-    wr32(m + 4, root_id);
-    wr32(m + 8, nblocks);
-    wr32(m + 12, 0);
-    write_full(fd, m, 16, 0);
+    memset(metabuf, 0, 4096);
+    wr32(metabuf, (i32)MAGIC);
+    wr32(metabuf + 4, root_id);
+    wr32(metabuf + 8, nblocks);
+    wr32(metabuf + 12, 0);
+    write_full(fd, metabuf, 4096, 0);
 }
 
 static void load_or_init(){
-    u8 m[16];
-    ssize_t r = pread(fd, m, 16, 0);
-    if (r == 16 && rd32(m) == (i32)MAGIC){
-        root_id = rd32(m + 4);
-        nblocks = rd32(m + 8);
+    memset(metabuf, 0, 4096);
+    ssize_t r = pread(fd, metabuf, 4096, 0);
+    if (r >= 16 && rd32(metabuf) == (i32)MAGIC){
+        root_id = rd32(metabuf + 4);
+        nblocks = rd32(metabuf + 8);
         u8 *b = fetch(root_id);
         root_slot = (int)(slot_of(b) - slots);
         return;
@@ -352,7 +355,7 @@ static void do_delete(const u8 *ka, int la, u32 va){
 }
 
 // ---------------- output ----------------
-static const int OUTSZ = 192 * 1024;         // 192 KiB
+static const int OUTSZ = 64 * 1024;          // 64 KiB
 static char outbuf[OUTSZ];
 static int outpos = 0;
 
@@ -411,7 +414,7 @@ static void do_find(const u8 *ka, int la){
 }
 
 // ---------------- input ----------------
-static const int INSZ = 1 << 15;
+static const int INSZ = 1 << 14;
 static u8 inbuf[INSZ];
 static size_t inpos = 0, inlen = 0;
 
@@ -450,10 +453,25 @@ static u32 read_u32(){
 }
 
 // ---------------- main ----------------
+static bool use_dio = false;
+
 int main(){
-    fd = open(DBFILE, O_RDWR | O_CREAT, 0644);
+    fd = open(DBFILE, O_RDWR | O_CREAT | O_DIRECT, 0644);
+    if (fd >= 0){
+        // probe: some filesystems accept the flag but reject IO.
+        // Use a read probe for non-empty files so we never clobber data.
+        struct stat st;
+        if (fstat(fd, &st) == 0){
+            ssize_t io;
+            if (st.st_size > 0) io = pread(fd, metabuf, 4096, 0);
+            else                io = pwrite(fd, metabuf, 4096, 0);
+            if (io == 4096) use_dio = true;
+            else { close(fd); fd = -1; }
+        } else { close(fd); fd = -1; }
+    }
+    if (fd < 0) fd = open(DBFILE, O_RDWR | O_CREAT, 0644);
     if (fd < 0) return 1;
-    cmem = (u8*)malloc((size_t)NSLOT * BS);
+    cmem = (u8*)aligned_alloc(4096, (size_t)NSLOT * BS);
     if (!cmem) return 1;
     for (int i = 0; i < NSLOT; i++){ slots[i].id = -1; slots[i].last = 0; slots[i].dirty = false; }
 
@@ -486,6 +504,7 @@ int main(){
     flush_cache();
     save_meta();
     fsync(fd);
+    if (!use_dio) posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED); // drop page cache
     close(fd);
     free(cmem);
 #ifdef DEBUG_MEM
